@@ -1,0 +1,48 @@
+# Dois Services para o RabbitMQ, para mostrar a diferença:
+#
+# 1) "rabbitmq-headless" -> exigido pelo StatefulSet (identidade/DNS por pod).
+#    rabbitmq-0.rabbitmq-headless.hash-jobs.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq-headless
+  namespace: hash-jobs
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/part-of: hash-jobs
+spec:
+  clusterIP: None
+  # publishNotReadyAddresses: publica o DNS do pod mesmo antes dele ficar Ready.
+  # Em cluster de RabbitMQ os nós precisam se achar DURANTE o boot.
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: rabbitmq
+  ports:
+    - name: amqp
+      port: 5672
+    - name: epmd
+      port: 4369
+    - name: dist
+      port: 25672
+---
+# 2) "rabbitmq" -> Service normal (ClusterIP) que os clientes usam.
+#    Tem um IP virtual estável; kube-proxy faz o load balancing para os pods Ready.
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: hash-jobs
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/part-of: hash-jobs
+spec:
+  type: ClusterIP # padrão; só acessível de dentro do cluster
+  selector:
+    app.kubernetes.io/name: rabbitmq
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: amqp
+    - name: management # UI web: kubectl port-forward -n hash-jobs svc/rabbitmq 15672
+      port: 15672
+      targetPort: management

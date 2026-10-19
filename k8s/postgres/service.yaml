@@ -1,0 +1,26 @@
+# Service "headless" (clusterIP: None).
+# Um Service normal ganha um IP virtual e faz load balancing entre os pods.
+# Um headless NÃO tem IP virtual: o DNS devolve direto o IP do(s) pod(s) e cria
+# um nome estável por pod:  postgres-0.postgres.hash-jobs.svc.cluster.local
+# O StatefulSet EXIGE um headless Service (campo serviceName) para dar essa
+# identidade de rede fixa a cada réplica.
+#
+# Os apps acessam só "postgres" (ou postgres.hash-jobs.svc.cluster.local).
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: hash-jobs
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: hash-jobs
+spec:
+  clusterIP: None
+  # selector: o Service manda tráfego para todo pod com ESSES labels.
+  # Se os labels do pod não baterem, o Service fica sem Endpoints (erro clássico).
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres # pode referenciar a porta pelo NOME definido no container

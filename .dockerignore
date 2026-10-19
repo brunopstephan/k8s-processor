@@ -1,0 +1,8 @@
+# Tudo que não precisa ir pro "build context" do Docker.
+# Context menor = build mais rápido e imagem sem lixo/segredos.
+**/node_modules
+.git
+k8s
+docs
+scripts
+*.md

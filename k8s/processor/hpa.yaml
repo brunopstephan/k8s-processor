@@ -1,0 +1,45 @@
+# HorizontalPodAutoscaler (HPA): ajusta o número de réplicas do Deployment
+# conforme uma métrica. O controller do HPA roda a cada ~15s:
+#   réplicas desejadas = ceil(réplicas atuais * uso atual / alvo)
+#   ex.: 2 pods a 180% de CPU, alvo 60%  ->  ceil(2 * 180/60) = 6
+#
+# Precisa do metrics-server (coleta CPU/memória dos kubelets). Ver scripts/up.sh.
+# Acompanhe:  kubectl get hpa -n hash-jobs -w
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: processor
+  namespace: hash-jobs
+  labels:
+    app.kubernetes.io/name: processor
+    app.kubernetes.io/part-of: hash-jobs
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: processor
+  minReplicas: 1
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60 # % da média de requests.cpu entre os pods
+  # behavior: controla a VELOCIDADE de escalar (evita "flapping", sobe-desce-sobe).
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0 # sobe na hora
+      policies:
+        - type: Pods
+          value: 2 # no máximo +2 pods...
+          periodSeconds: 15 # ...a cada 15s
+    scaleDown:
+      # Só desce se a recomendação ficou baixa durante 60s seguidos.
+      # Padrão é 300s; reduzi para você ver acontecer mais rápido.
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 50 # remove no máximo metade dos pods...
+          periodSeconds: 30 # ...a cada 30s

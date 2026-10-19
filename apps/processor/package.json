@@ -1,0 +1,10 @@
+{
+  "name": "@app/processor",
+  "private": true,
+  "scripts": {
+    "dev": "bun run --watch src/index.ts"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.9"
+  }
+}

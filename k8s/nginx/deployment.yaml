@@ -1,0 +1,89 @@
+# Nginx como reverse proxy na frente da API.
+# Em produção este papel costuma ser de um Ingress Controller ou Gateway API
+# (ver docs/GLOSSARIO.md). Aqui é um Deployment comum para você ver as peças.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+  namespace: hash-jobs
+  labels:
+    app.kubernetes.io/name: nginx
+    app.kubernetes.io/component: proxy
+    app.kubernetes.io/part-of: hash-jobs
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nginx
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nginx
+        app.kubernetes.io/component: proxy
+        app.kubernetes.io/part-of: hash-jobs
+    spec:
+      terminationGracePeriodSeconds: 30
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101 # usuário nginx da imagem unprivileged
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: nginx
+      containers:
+        - name: nginx
+          # Variante unprivileged: roda como não-root e escuta na 8080.
+          image: nginxinc/nginx-unprivileged:1.29.4-alpine
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /nginx-health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /nginx-health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nginx/conf.d # substitui o diretório inteiro pelo ConfigMap
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp # pid e arquivos temporários do nginx (FS raiz é read-only)
+      volumes:
+        - name: config
+          configMap:
+            name: nginx-config
+        - name: tmp
+          emptyDir: {}

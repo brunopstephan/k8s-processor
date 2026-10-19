@@ -1,0 +1,147 @@
+# Deployment da API (stateless): qualquer réplica atende qualquer request.
+# Deployment -> cria/gerencia ReplicaSets -> que criam/gerenciam Pods.
+# A cada mudança no "template" um ReplicaSet NOVO é criado e o rollout migra os pods.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: hash-jobs
+  labels:
+    # Labels recomendados (app.kubernetes.io/*): padrão que ferramentas entendem.
+    app.kubernetes.io/name: api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: hash-jobs
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  replicas: 3
+  # Quantos ReplicaSets antigos guardar para `kubectl rollout undo`. (padrão 10)
+  revisionHistoryLimit: 5
+  # Pod precisa ficar Ready por X segundos para contar como "disponível" no rollout.
+  # Pega containers que sobem e morrem logo em seguida.
+  minReadySeconds: 5
+  # Se o rollout não progredir em 120s, ele é marcado como falho (rollout status sai com erro).
+  progressDeadlineSeconds: 120
+  strategy:
+    type: RollingUpdate # (a outra opção, Recreate, mata tudo e depois sobe: tem downtime)
+    rollingUpdate:
+      # maxSurge: quantos pods A MAIS que "replicas" podem existir durante o rollout.
+      maxSurge: 1
+      # maxUnavailable: quantos podem ficar indisponíveis. 0 = zero downtime
+      # (só mata um antigo quando um novo estiver Ready).
+      maxUnavailable: 0
+  # selector: COMO o Deployment encontra "seus" pods. Tem que bater com
+  # template.metadata.labels, e é IMUTÁVEL depois de criado.
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/part-of: hash-jobs
+        app.kubernetes.io/version: "0.1.0"
+    spec:
+      # Tempo entre o SIGTERM e o SIGKILL. O app usa esse tempo para fechar conexões.
+      terminationGracePeriodSeconds: 30
+      # Não montar o token da API do k8s no pod: nosso app não fala com o kube-apiserver.
+      automountServiceAccountToken: false
+      # securityContext do POD (vale para todos os containers).
+      securityContext:
+        runAsNonRoot: true # recusa rodar se a imagem tentar usar root
+        seccompProfile:
+          type: RuntimeDefault # filtro de syscalls padrão do runtime
+      # Espalha as réplicas entre nodes: diferença máxima de 1 pod entre os nodes.
+      # Se um worker cair, não perdemos todas as réplicas de uma vez.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname # "domínio" = cada node
+          whenUnsatisfiable: ScheduleAnyway # preferência, não regra rígida (DoNotSchedule)
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: api
+      initContainers:
+        # Espera as dependências antes de subir a API (que crasharia sem o RabbitMQ).
+        - name: wait-deps
+          image: busybox:1.37.0
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z postgres 5432; do echo waiting postgres; sleep 2; done
+              until nc -z rabbitmq 5672; do echo waiting rabbitmq; sleep 2; done
+          securityContext:
+            runAsUser: 65534
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 32Mi }
+      containers:
+        - name: api
+          image: hash-api:0.1.0
+          # IfNotPresent: usa a imagem que já está no node (carregada com `kind load`).
+          # Com tag "latest" o padrão vira Always, e o node tentaria baixar do Docker Hub -> ErrImagePull.
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          # Ordem importa: chaves repetidas, o último vence.
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: postgres-credentials
+            - secretRef:
+                name: rabbitmq-credentials
+          resources:
+            requests:
+              cpu: 100m
+              memory: 96Mi
+            limits:
+              # Sem limit de CPU de propósito (prática comum): evita throttling.
+              # Memória SEMPRE com limit: vazamento de memória não derruba o node.
+              memory: 256Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz # checa postgres + rabbitmq + tabela criada pela migration
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz # só "o processo responde?"
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          lifecycle:
+            # preStop roda ANTES do SIGTERM. Dá tempo para o kube-proxy e o nginx
+            # tirarem esse pod da lista de destinos. Sem isso, requests em voo
+            # podem pegar um pod que já está fechando -> 502 durante o rollout.
+            # (preStop.sleep é nativo do k8s, não precisa ter "sleep" na imagem)
+            preStop:
+              sleep:
+                seconds: 5
+          # securityContext do CONTAINER
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true # app não consegue escrever no FS da imagem
+            capabilities:
+              drop: ["ALL"] # remove todas as capabilities do Linux
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp # único lugar gravável (FS raiz é read-only)
+      volumes:
+        # emptyDir: volume temporário que nasce e morre com o pod.
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

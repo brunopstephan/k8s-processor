@@ -1,0 +1,106 @@
+# Deployment do processador (worker).
+# Repare: NÃO existe Service para ele. Service serve para RECEBER tráfego;
+# o processor só abre conexão de SAÍDA para o RabbitMQ e o Postgres.
+# Ninguém precisa achar ele na rede.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: processor
+  namespace: hash-jobs
+  labels:
+    app.kubernetes.io/name: processor
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: hash-jobs
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  # SEM "replicas" de propósito: quem decide a quantidade é o HPA (processor/hpa.yaml).
+  # Se colocássemos replicas: 1 aqui, cada `kubectl apply` resetaria para 1,
+  # brigando com o HPA. Sem o campo, o padrão na criação é 1.
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: processor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: processor
+        app.kubernetes.io/component: worker
+        app.kubernetes.io/part-of: hash-jobs
+        app.kubernetes.io/version: "0.1.0"
+    spec:
+      # O processor trata SIGTERM: para de consumir e termina o job atual.
+      # 60s é a "janela" para isso. Se estourar, SIGKILL; a mensagem sem ack
+      # volta para a fila e outra réplica processa. Nada se perde.
+      terminationGracePeriodSeconds: 60
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: processor
+      initContainers:
+        - name: wait-deps
+          image: busybox:1.37.0
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z postgres 5432; do echo waiting postgres; sleep 2; done
+              until nc -z rabbitmq 5672; do echo waiting rabbitmq; sleep 2; done
+          securityContext:
+            runAsUser: 65534
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 32Mi }
+      containers:
+        - name: processor
+          image: hash-processor:0.1.0
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: postgres-credentials
+            - secretRef:
+                name: rabbitmq-credentials
+          resources:
+            # O HPA calcula o uso de CPU em % do REQUEST.
+            # 500m de request e o bcrypt usando ~1 core = 200% de utilização.
+            # Sem requests.cpu o HPA não funciona (fica <unknown>).
+            requests:
+              cpu: 500m
+              memory: 96Mi
+            limits:
+              # Aqui limitamos CPU: cada réplica usa no máximo 1 core.
+              # Assim, para processar mais rápido, o certo é escalar horizontalmente.
+              cpu: "1"
+              memory: 256Mi
+          # Sem probes HTTP: o worker não tem servidor web. Se a conexão com o
+          # RabbitMQ cair, o processo sai com erro e o kubelet reinicia o container
+          # (restartPolicy: Always, o padrão de Deployments).
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

@@ -1,0 +1,22 @@
+# ConfigMap = configuração NÃO sensível, separada da imagem.
+# Mesma imagem roda em dev/staging/prod; só o ConfigMap muda.
+# Usado pela API, pelo processor e pelo Job de migration (via envFrom).
+#
+# Atenção: mudar um ConfigMap usado como env NÃO atualiza pods rodando.
+# Env só é lido quando o container inicia -> kubectl rollout restart deploy/api
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: hash-jobs
+  labels:
+    app.kubernetes.io/part-of: hash-jobs
+data:
+  PORT: "3000" # valores de ConfigMap são SEMPRE string (aspas em números)
+  # Nome do Service do postgres. O DNS do cluster (CoreDNS) resolve "postgres"
+  # para pods no mesmo namespace. Nome completo: postgres.hash-jobs.svc.cluster.local
+  PGHOST: postgres
+  PGPORT: "5432"
+  RABBITMQ_HOST: rabbitmq
+  RABBITMQ_PORT: "5672"
+  QUEUE_NAME: hash-jobs

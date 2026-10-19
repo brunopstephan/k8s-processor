@@ -1,0 +1,22 @@
+# Service ClusterIP da API: um IP virtual + nome DNS ("api") estáveis na frente
+# das réplicas, que vão e vêm com IPs diferentes. O kube-proxy em cada node
+# programa regras (iptables/ipvs/nftables) que distribuem as conexões entre
+# os pods Ready que batem com o selector.
+#
+# Veja os pods por trás dele:  kubectl get endpointslices -n hash-jobs -l kubernetes.io/service-name=api
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: hash-jobs
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: hash-jobs
+spec:
+  type: ClusterIP # só dentro do cluster. Quem expõe para fora é o nginx.
+  selector:
+    app.kubernetes.io/name: api
+  ports:
+    - name: http
+      port: 3000 # porta do Service
+      targetPort: http # porta do container (pelo nome)

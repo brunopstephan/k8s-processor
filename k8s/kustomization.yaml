@@ -1,0 +1,28 @@
+# Kustomize vem embutido no kubectl:  kubectl apply -k k8s/
+# Ele junta todos os arquivos abaixo e aplica de uma vez, em ordem segura
+# (Namespace primeiro, depois Secrets/ConfigMaps, Services, workloads...).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Força todos os recursos para este namespace (não precisa repetir em cada arquivo,
+# mas deixei explícito nos arquivos também, para fins de estudo).
+namespace: hash-jobs
+
+resources:
+  - 00-namespace.yaml
+  - postgres/secret.yaml
+  - postgres/service.yaml
+  - postgres/statefulset.yaml
+  - rabbitmq/secret.yaml
+  - rabbitmq/service.yaml
+  - rabbitmq/statefulset.yaml
+  - api/configmap.yaml
+  - api/migrate-job.yaml
+  - api/deployment.yaml
+  - api/service.yaml
+  - api/pdb.yaml
+  - processor/deployment.yaml
+  - processor/hpa.yaml
+  - nginx/configmap.yaml
+  - nginx/deployment.yaml
+  - nginx/service.yaml

@@ -1,0 +1,113 @@
+# StatefulSet: como um Deployment, mas para apps COM ESTADO (bancos, filas).
+# Diferenças principais:
+#  - pods com nome fixo e ordinal: postgres-0, postgres-1... (não postgres-7f9c-xk2)
+#  - cada pod ganha SEU PRÓPRIO volume (via volumeClaimTemplates) que sobrevive
+#    à morte do pod: postgres-0 volta e reconecta no mesmo disco
+#  - cria/deleta pods em ordem (0, 1, 2...), um de cada vez (OrderedReady)
+#
+# Obs: replicas: 1. Escalar um StatefulSet de Postgres para 2 NÃO cria replicação;
+# seriam 2 bancos independentes. Replicação de verdade = operator (CloudNativePG)
+# ou banco gerenciado (RDS). Esse StatefulSet é para estudo.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: hash-jobs
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: hash-jobs
+spec:
+  # Nome do headless Service que dá DNS estável a cada pod (obrigatório).
+  serviceName: postgres
+  replicas: 1
+  # OrderedReady (padrão): sobe postgres-0, espera ficar Ready, depois postgres-1...
+  # Parallel: sobe todos juntos. Para banco, ordem importa.
+  podManagementPolicy: OrderedReady
+  # Como atualizar quando o template muda. RollingUpdate recria um pod por vez,
+  # do maior ordinal para o menor.
+  updateStrategy:
+    type: RollingUpdate
+  # O que fazer com os PVCs quando o StatefulSet é deletado/escalado para baixo.
+  # Retain (padrão) = os discos ficam. Seguro para dados.
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: hash-jobs
+    spec:
+      # Tempo para o postgres fazer shutdown limpo (flush para disco) antes do SIGKILL.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        # fsGroup: o volume montado passa a pertencer a esse grupo, assim o
+        # usuário postgres (uid 70 na imagem alpine) consegue escrever nele.
+        fsGroup: 70
+        runAsUser: 70
+        runAsGroup: 70
+        runAsNonRoot: true
+      containers:
+        - name: postgres
+          image: postgres:18.1-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+          # envFrom: injeta TODAS as chaves do Secret como variáveis de ambiente.
+          envFrom:
+            - secretRef:
+                name: postgres-credentials
+          resources:
+            # requests: o que o scheduler RESERVA no node para o pod. Usado para decidir
+            # em qual node o pod cabe. 250m = 0,25 de 1 vCPU.
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            # limits: o teto. Passou de memória -> OOMKilled. Passou de CPU -> throttling
+            # (fica mais lento, não morre).
+            limits:
+              memory: 512Mi
+          # startupProbe: dá tempo para o boot. Enquanto ela não passar, liveness e
+          # readiness nem são testadas. Aqui: até 30 x 2s = 60s para subir.
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-U", "hash", "-d", "hashjobs"]
+            periodSeconds: 2
+            failureThreshold: 30
+          # readinessProbe: falhou -> pod sai do Service (não recebe conexão), sem reiniciar.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "hash", "-d", "hashjobs"]
+            periodSeconds: 5
+            failureThreshold: 3
+          # livenessProbe: falhou N vezes seguidas -> kubelet REINICIA o container.
+          # Seja conservador: liveness agressiva demais derruba banco sob carga.
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "hash", "-d", "hashjobs"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          volumeMounts:
+            # No postgres 18 o PGDATA fica em /var/lib/postgresql/18/docker,
+            # então montamos o volume no diretório pai.
+            - name: data
+              mountPath: /var/lib/postgresql
+  # volumeClaimTemplates: "molde" de PVC. Para cada pod o StatefulSet cria um PVC
+  # chamado <template>-<pod>  ->  data-postgres-0
+  # O PVC pede um volume à StorageClass padrão (no kind: "standard", que usa
+  # local-path-provisioner = uma pasta no disco do node).
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        # ReadWriteOnce: o volume é montado como leitura/escrita por UM node por vez.
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

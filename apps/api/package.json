@@ -1,0 +1,12 @@
+{
+  "name": "@app/api",
+  "private": true,
+  "scripts": {
+    "dev": "bun run --hot src/index.ts",
+    "migrate": "bun src/migrate.ts"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.9",
+    "hono": "^4.13.13"
+  }
+}

@@ -1,0 +1,9 @@
+# Namespace = "pasta" lógica dentro do cluster. Isola nomes (pode existir um
+# Service "api" em outro namespace), permite aplicar ResourceQuota/RBAC por time
+# e facilita limpar tudo: kubectl delete ns hash-jobs
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hash-jobs
+  labels:
+    app.kubernetes.io/part-of: hash-jobs

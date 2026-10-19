@@ -1,0 +1,69 @@
+# Job = roda um pod ATÉ TERMINAR com sucesso (exit 0) e para.
+# Diferente do Deployment, que mantém pods rodando para sempre.
+# Usado para tarefas pontuais: migration, backup, seed. (CronJob = Job agendado.)
+#
+# Reaproveita a imagem da API, só troca o comando.
+#
+# Obs: o spec de um Job é imutável. Para rodar de novo:
+#   kubectl delete job -n hash-jobs api-migrate && kubectl apply -k k8s/
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: api-migrate
+  namespace: hash-jobs
+  labels:
+    app.kubernetes.io/name: api-migrate
+    app.kubernetes.io/component: migration
+    app.kubernetes.io/part-of: hash-jobs
+spec:
+  # Quantas vezes tentar de novo se o pod falhar (com backoff exponencial 10s, 20s, 40s...).
+  backoffLimit: 4
+  # Prazo máximo total do Job; passou disso, ele é marcado como Failed.
+  activeDeadlineSeconds: 300
+  # Apaga o Job (e seus pods) 10 min depois de terminar, para não acumular lixo.
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api-migrate
+        app.kubernetes.io/part-of: hash-jobs
+    spec:
+      # Em Job, restartPolicy precisa ser Never ou OnFailure (Always é só para Deployments).
+      # Never: cada tentativa cria um pod novo (bom para ver os logs de cada falha).
+      restartPolicy: Never
+      initContainers:
+        # initContainers rodam ANTES dos containers principais, em sequência,
+        # e precisam terminar com sucesso. Aqui: esperar o postgres aceitar conexão.
+        - name: wait-postgres
+          image: busybox:1.37.0
+          command: ["sh", "-c", "until nc -z postgres 5432; do echo waiting postgres; sleep 2; done"]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534 # "nobody"
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      containers:
+        - name: migrate
+          image: hash-api:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["bun", "src/migrate.ts"]
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: postgres-credentials
+            - secretRef:
+                name: rabbitmq-credentials
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

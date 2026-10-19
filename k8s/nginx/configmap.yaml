@@ -1,0 +1,47 @@
+# O arquivo de config do nginx vem de um ConfigMap montado como VOLUME
+# (diferente do app-config, que vira variável de ambiente).
+# Cada chave de "data" vira um arquivo dentro do mountPath:
+#   /etc/nginx/conf.d/default.conf
+#
+# Montado como volume, o arquivo é atualizado no pod quando o ConfigMap muda
+# (demora até ~1 min), mas o nginx precisa recarregar: kubectl rollout restart deploy/nginx
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: hash-jobs
+  labels:
+    app.kubernetes.io/name: nginx
+    app.kubernetes.io/part-of: hash-jobs
+data:
+  default.conf: |
+    # "api" = nome do Service. O CoreDNS resolve para o ClusterIP, que é FIXO.
+    # Por isso o nginx não precisa saber dos IPs dos pods (que mudam toda hora):
+    # o kube-proxy distribui entre as réplicas.
+    upstream api {
+      server api:3000;
+      keepalive 16;
+    }
+
+    server {
+      listen 8080; # imagem unprivileged: não-root não pode abrir porta < 1024
+
+      # Para as probes do próprio nginx (não depende da API).
+      location = /nginx-health {
+        access_log off;
+        return 200 "ok\n";
+      }
+
+      location / {
+        proxy_pass http://api;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 30s;
+        # Mostra qual pod do nginx atendeu (a API manda x-served-by com o pod dela).
+        add_header X-Nginx-Pod $hostname always;
+      }
+    }

@@ -1,0 +1,78 @@
+# RabbitMQ como StatefulSet.
+# Por que importa aqui: o RabbitMQ guarda os dados numa pasta nomeada pelo
+# NOME DO NÓ (rabbit@<hostname>). Num Deployment o hostname muda a cada pod novo
+# (rabbitmq-5d8f...-x2k9) -> ele não acharia as filas antigas. No StatefulSet o
+# hostname é sempre rabbitmq-0 -> mesmos dados, mesmas filas duráveis.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+  namespace: hash-jobs
+  labels:
+    app.kubernetes.io/name: rabbitmq
+    app.kubernetes.io/component: queue
+    app.kubernetes.io/part-of: hash-jobs
+spec:
+  serviceName: rabbitmq-headless
+  replicas: 1
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: rabbitmq
+        app.kubernetes.io/component: queue
+        app.kubernetes.io/part-of: hash-jobs
+    spec:
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        # usuário rabbitmq na imagem alpine = uid/gid 100/101
+        fsGroup: 101
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:4.2.3-management-alpine
+          ports:
+            - name: amqp
+              containerPort: 5672
+            - name: management
+              containerPort: 15672
+          envFrom:
+            - secretRef:
+                name: rabbitmq-credentials
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          startupProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            periodSeconds: 5
+            timeoutSeconds: 10
+            failureThreshold: 24 # até 2 min para subir (rabbit é lento no boot)
+          readinessProbe:
+            exec:
+              # check_port_connectivity: os listeners (5672) estão aceitando conexão?
+              command: ["rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+            periodSeconds: 10
+            timeoutSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            periodSeconds: 30
+            timeoutSeconds: 15
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

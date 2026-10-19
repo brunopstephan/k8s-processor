@@ -1,0 +1,20 @@
+# Config do cluster local criado pelo kind ("Kubernetes IN Docker").
+# Cada "node" aqui é um container Docker rodando kubelet + containerd.
+#   kind create cluster --config k8s/kind-config.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: k8s-app
+nodes:
+  # control plane: roda api-server, etcd, scheduler e controller-manager.
+  # Por padrão, NÃO recebe pods de aplicação (tem um "taint" que repele workloads).
+  - role: control-plane
+    # Mapeia a porta 8080 do seu Mac -> porta 30080 do container do node.
+    # 30080 é o NodePort do Service do nginx. Assim: curl localhost:8080 chega no nginx.
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8080
+        protocol: TCP
+  # 2 workers: é onde os pods rodam. Ter 2 permite ver o scheduler espalhando
+  # réplicas (topologySpreadConstraints) e simular a queda de um node.
+  - role: worker
+  - role: worker

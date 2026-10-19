@@ -1,0 +1,19 @@
+# PodDisruptionBudget (PDB): protege contra interrupções VOLUNTÁRIAS
+# (kubectl drain de um node para manutenção, upgrade de cluster, autoscaler de nodes).
+# Garante que pelo menos 2 pods da API continuem de pé durante essas operações.
+# Não protege de falhas involuntárias (node pegando fogo).
+#
+# Teste:  kubectl drain k8s-app-worker --ignore-daemonsets --delete-emptydir-data
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api
+  namespace: hash-jobs
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: hash-jobs
+spec:
+  minAvailable: 2 # ou maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
