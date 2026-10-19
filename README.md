@@ -1,5 +1,12 @@
 # hash-jobs: projeto de estudo de Kubernetes
 
+Observação:
+Esse projeto foi construído por IA, porém o foco dele é 100% entender na prática os conceitos e impacto da ferramenta Kubernetes, então não é focado no código dos serviços, mas sim no funcionamento do Kubernetes em cima deles.
+
+Antes de qualquer execução, houve um estudo sobre a ferramenta, entendendo principais conceitos e como funciona. 
+
+Ao longo da execução, houve aprofundamento nesses conceitos e muita documentação, então esse projeto não serve primariamente para portifólio, mas como um bloco de notas de estudo.
+
 API que recebe jobs, enfileira no RabbitMQ e um processador escalável (HPA) calcula hashes bcrypt e grava no Postgres. Tudo rodando num cluster **kind** de 3 nodes.
 
 ```
